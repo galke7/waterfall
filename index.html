@@ -93,7 +93,6 @@
         const { useState, useEffect, useCallback, useRef } = React;
 
         // --- CONFIGURATION ---
-        // GOOGLE CLOUD CLIENT ID
         const GOOGLE_CLIENT_ID = "310423440367-sku9mv7cr23hkn911gig8v56fcjumqj1.apps.googleusercontent.com"; 
         
         const DEFAULT_GOAL = 2000;
@@ -134,12 +133,6 @@
 
             init: (callback) => {
                 if (window.google) {
-                    // Check if Client ID is configured
-                    if (GOOGLE_CLIENT_ID === "310423440367-sku9mv7cr23hkn911gig8v56fcjumqj1.apps.googleusercontent.com") {
-                        console.warn("Google Client ID not configured");
-                        return;
-                    }
-
                     try {
                         GoogleFitService.tokenClient = google.accounts.oauth2.initTokenClient({
                             client_id: GOOGLE_CLIENT_ID,
@@ -162,10 +155,6 @@
             },
 
             connect: () => {
-                if (GOOGLE_CLIENT_ID === "310423440367-sku9mv7cr23hkn911gig8v56fcjumqj1.apps.googleusercontent.com") {
-                    alert("⚠️ Developer Setup Required\n\nPlease add your Google Client ID to the index.html file to enable Google Fit integration.");
-                    return;
-                }
                 if (GoogleFitService.tokenClient) {
                     GoogleFitService.tokenClient.requestAccessToken({ prompt: 'consent' });
                 } else {
@@ -182,6 +171,7 @@
                 const startTimeNs = (timestamp * 1000000).toString(); 
                 const endTimeNs = ((timestamp + 1000) * 1000000).toString(); // 1s duration
                 
+                // Using 'waterfall' as the app name in the ID as requested
                 const dataSourceId = "raw:com.google.hydration:waterfall:WaterTracker:WaterLog";
 
                 // 1. Ensure Data Source Exists
@@ -194,7 +184,7 @@
                         },
                         body: JSON.stringify({
                             "dataStreamId": dataSourceId,
-                            "name": "waterfall Water Log",
+                            "name": "Waterfall Water Log",
                             "type": "raw",
                             "application": { "name": "waterfall" },
                             "dataType": { "name": "com.google.hydration" },
