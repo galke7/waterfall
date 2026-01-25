@@ -97,6 +97,9 @@
         
         const DEFAULT_GOAL = 2000;
         const STORAGE_KEY = 'waterfall_data_v1';
+        // New keys for saving the token
+        const GOOGLE_TOKEN_KEY = 'waterfall_google_token';
+        const GOOGLE_EXPIRY_KEY = 'waterfall_token_expiry';
         const GOOGLE_FIT_SCOPES = 'https://www.googleapis.com/auth/fitness.nutrition.write';
 
         // --- Storage Service ---
@@ -132,46 +135,80 @@
             accessToken: null,
 
             init: (callback) => {
-                if (window.google) {
-                    try {
-                        GoogleFitService.tokenClient = google.accounts.oauth2.initTokenClient({
-                            client_id: GOOGLE_CLIENT_ID,
-                            scope: GOOGLE_FIT_SCOPES,
-                            callback: (tokenResponse) => {
-                                if (tokenResponse.access_token) {
-                                    GoogleFitService.accessToken = tokenResponse.access_token;
-                                    callback(true);
-                                } else {
-                                    callback(false);
-                                }
-                            },
-                        });
-                    } catch (e) {
-                        console.error("Error initializing Google Identity Services:", e);
+                // 1. Try to restore an existing token from LocalStorage
+                const storedToken = localStorage.getItem(GOOGLE_TOKEN_KEY);
+                const storedExpiry = localStorage.getItem(GOOGLE_EXPIRY_KEY);
+
+                if (storedToken && storedExpiry) {
+                    // Check if token is still valid (not expired)
+                    if (Date.now() < parseInt(storedExpiry)) {
+                        console.log("Restored valid Google Fit session");
+                        GoogleFitService.accessToken = storedToken;
+                        callback(true);
+                    } else {
+                        console.log("Saved Google Fit session expired");
+                        localStorage.removeItem(GOOGLE_TOKEN_KEY);
+                        localStorage.removeItem(GOOGLE_EXPIRY_KEY);
                     }
-                } else {
-                    console.error("Google GSI script not loaded");
                 }
+
+                // 2. Initialize the Google Client (for when user clicks the button)
+                const initGSI = () => {
+                    if (window.google) {
+                        try {
+                            GoogleFitService.tokenClient = google.accounts.oauth2.initTokenClient({
+                                client_id: GOOGLE_CLIENT_ID,
+                                scope: GOOGLE_FIT_SCOPES,
+                                callback: (tokenResponse) => {
+                                    if (tokenResponse.access_token) {
+                                        GoogleFitService.accessToken = tokenResponse.access_token;
+                                        
+                                        // Save token and expiry (usually expires in 3600s / 1 hour)
+                                        const expiryTime = Date.now() + (tokenResponse.expires_in * 1000);
+                                        localStorage.setItem(GOOGLE_TOKEN_KEY, tokenResponse.access_token);
+                                        localStorage.setItem(GOOGLE_EXPIRY_KEY, expiryTime.toString());
+                                        
+                                        callback(true);
+                                    } else {
+                                        callback(false);
+                                    }
+                                },
+                            });
+                        } catch (e) {
+                            console.error("Error initializing Google Identity Services:", e);
+                        }
+                    } else {
+                        // If script hasn't loaded yet, try again in 500ms
+                        setTimeout(initGSI, 500);
+                    }
+                };
+                
+                initGSI();
             },
 
             connect: () => {
                 if (GoogleFitService.tokenClient) {
                     GoogleFitService.tokenClient.requestAccessToken({ prompt: 'consent' });
                 } else {
-                    alert("Google Services are still loading or failed to initialize. Please refresh the page.");
+                    alert("Google Services are still loading. Please wait a moment and try again.");
                 }
+            },
+            
+            disconnect: () => {
+                GoogleFitService.accessToken = null;
+                localStorage.removeItem(GOOGLE_TOKEN_KEY);
+                localStorage.removeItem(GOOGLE_EXPIRY_KEY);
             },
 
             // Create Data Source if it doesn't exist, then log data
             logWater: async (amountMl, timestamp) => {
-                if (!GoogleFitService.accessToken) return;
+                if (!GoogleFitService.accessToken) return false;
 
                 const amountLiters = amountMl / 1000;
                 // Google Fit requires nanoseconds
                 const startTimeNs = (timestamp * 1000000).toString(); 
                 const endTimeNs = ((timestamp + 1000) * 1000000).toString(); // 1s duration
                 
-                // Using 'waterfall' as the app name in the ID as requested
                 const dataSourceId = "raw:com.google.hydration:waterfall:WaterTracker:WaterLog";
 
                 // 1. Ensure Data Source Exists
@@ -191,8 +228,8 @@
                             "device": { "manufacturer": "Web", "model": "Browser", "type": "unknown" }
                         })
                     });
-                    // We ignore errors here because 409 Conflict means it already exists, which is fine.
                 } catch (e) {
+                    // Ignore conflict errors if datasource exists
                     console.log("Datasource might already exist", e);
                 }
 
@@ -223,6 +260,11 @@
                     if (response.ok) {
                         console.log("Successfully logged to Google Fit");
                         return true;
+                    } else if (response.status === 401) {
+                        // Token expired during request
+                        console.warn("Token expired");
+                        GoogleFitService.disconnect();
+                        return false;
                     } else {
                         console.error("Error logging to Fit", await response.text());
                         return false;
@@ -469,6 +511,11 @@
                     if (success) {
                         setShowFitSuccess(true);
                         setTimeout(() => setShowFitSuccess(false), 2000);
+                    } else {
+                        // If log failed because token expired, update UI
+                        if (!GoogleFitService.accessToken) {
+                            setIsFitConnected(false);
+                        }
                     }
                 }
             };
