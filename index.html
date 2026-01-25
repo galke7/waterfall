@@ -141,7 +141,8 @@
 
                 if (storedToken && storedExpiry) {
                     // Check if token is still valid (not expired)
-                    if (Date.now() < parseInt(storedExpiry)) {
+                    // We add a buffer of 5 minutes to be safe
+                    if (Date.now() < (parseInt(storedExpiry) - 300000)) {
                         console.log("Restored valid Google Fit session");
                         GoogleFitService.accessToken = storedToken;
                         callback(true);
@@ -188,7 +189,8 @@
 
             connect: () => {
                 if (GoogleFitService.tokenClient) {
-                    GoogleFitService.tokenClient.requestAccessToken({ prompt: 'consent' });
+                    // Removed { prompt: 'consent' } to avoid forcing re-approval every time
+                    GoogleFitService.tokenClient.requestAccessToken({});
                 } else {
                     alert("Google Services are still loading. Please wait a moment and try again.");
                 }
