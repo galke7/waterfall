@@ -3,7 +3,7 @@
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
-    <title>HydroFlow</title>
+    <title>Waterfall</title>
     
     <!-- React & ReactDOM -->
     <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
@@ -14,6 +14,9 @@
     
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+    
+    <!-- Google Identity Services -->
+    <script src="https://accounts.google.com/gsi/client" async defer></script>
     
     <!-- Fonts & Icons -->
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
@@ -31,6 +34,10 @@
               "background-dark": "#0e1d2a",
               "surface-dark": "#162838",
               "surface-light": "#ffffff",
+              "fit-red": "#EA4335",
+              "fit-yellow": "#FBBC04",
+              "fit-green": "#34A853",
+              "fit-blue": "#4285F4",
             },
             fontFamily: {
               "display": ["Plus Jakarta Sans", "sans-serif"]
@@ -67,7 +74,6 @@
         -webkit-tap-highlight-color: transparent;
         overscroll-behavior-y: none;
       }
-      /* Custom scrollbar for webkit */
       ::-webkit-scrollbar {
         width: 6px;
       }
@@ -84,15 +90,17 @@
     <div id="root"></div>
 
     <script type="text/babel">
-        const { useState, useEffect, useCallback } = React;
+        const { useState, useEffect, useCallback, useRef } = React;
 
-        // --- Constants & Types ---
+        // --- CONFIGURATION ---
+        // GOOGLE CLOUD CLIENT ID
+        const GOOGLE_CLIENT_ID = "310423440367-sku9mv7cr23hkn911gig8v56fcjumqj1.apps.googleusercontent.com"; 
+        
         const DEFAULT_GOAL = 2000;
-        const STORAGE_KEY = 'hydroflow_data_v1';
+        const STORAGE_KEY = 'waterfall_data_v1';
+        const GOOGLE_FIT_SCOPES = 'https://www.googleapis.com/auth/fitness.nutrition.write';
 
         // --- Storage Service ---
-        // Using localStorage as it is the modern standard for persisting app state, 
-        // matching the behavior of the uploaded storageService.ts
         const loadState = () => {
             try {
                 const serializedState = localStorage.getItem(STORAGE_KEY);
@@ -119,6 +127,123 @@
             return Date.now().toString(36) + Math.random().toString(36).substr(2);
         };
 
+        // --- Google Fit Service ---
+        const GoogleFitService = {
+            tokenClient: null,
+            accessToken: null,
+
+            init: (callback) => {
+                if (window.google) {
+                    // Check if Client ID is configured
+                    if (GOOGLE_CLIENT_ID === "310423440367-sku9mv7cr23hkn911gig8v56fcjumqj1.apps.googleusercontent.com") {
+                        console.warn("Google Client ID not configured");
+                        return;
+                    }
+
+                    try {
+                        GoogleFitService.tokenClient = google.accounts.oauth2.initTokenClient({
+                            client_id: GOOGLE_CLIENT_ID,
+                            scope: GOOGLE_FIT_SCOPES,
+                            callback: (tokenResponse) => {
+                                if (tokenResponse.access_token) {
+                                    GoogleFitService.accessToken = tokenResponse.access_token;
+                                    callback(true);
+                                } else {
+                                    callback(false);
+                                }
+                            },
+                        });
+                    } catch (e) {
+                        console.error("Error initializing Google Identity Services:", e);
+                    }
+                } else {
+                    console.error("Google GSI script not loaded");
+                }
+            },
+
+            connect: () => {
+                if (GOOGLE_CLIENT_ID === "310423440367-sku9mv7cr23hkn911gig8v56fcjumqj1.apps.googleusercontent.com") {
+                    alert("⚠️ Developer Setup Required\n\nPlease add your Google Client ID to the index.html file to enable Google Fit integration.");
+                    return;
+                }
+                if (GoogleFitService.tokenClient) {
+                    GoogleFitService.tokenClient.requestAccessToken({ prompt: 'consent' });
+                } else {
+                    alert("Google Services are still loading or failed to initialize. Please refresh the page.");
+                }
+            },
+
+            // Create Data Source if it doesn't exist, then log data
+            logWater: async (amountMl, timestamp) => {
+                if (!GoogleFitService.accessToken) return;
+
+                const amountLiters = amountMl / 1000;
+                // Google Fit requires nanoseconds
+                const startTimeNs = (timestamp * 1000000).toString(); 
+                const endTimeNs = ((timestamp + 1000) * 1000000).toString(); // 1s duration
+                
+                const dataSourceId = "raw:com.google.hydration:waterfall:WaterTracker:WaterLog";
+
+                // 1. Ensure Data Source Exists
+                try {
+                    await fetch('https://www.googleapis.com/fitness/v1/users/me/dataSources', {
+                        method: 'POST',
+                        headers: {
+                            'Authorization': `Bearer ${GoogleFitService.accessToken}`,
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            "dataStreamId": dataSourceId,
+                            "name": "waterfall Water Log",
+                            "type": "raw",
+                            "application": { "name": "waterfall" },
+                            "dataType": { "name": "com.google.hydration" },
+                            "device": { "manufacturer": "Web", "model": "Browser", "type": "unknown" }
+                        })
+                    });
+                    // We ignore errors here because 409 Conflict means it already exists, which is fine.
+                } catch (e) {
+                    console.log("Datasource might already exist", e);
+                }
+
+                // 2. Add Dataset
+                const datasetId = `${startTimeNs}-${endTimeNs}`;
+                const url = `https://www.googleapis.com/fitness/v1/users/me/dataSources/${dataSourceId}/datasets/${datasetId}`;
+                
+                try {
+                    const response = await fetch(url, {
+                        method: 'PATCH',
+                        headers: {
+                            'Authorization': `Bearer ${GoogleFitService.accessToken}`,
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            "dataSourceId": dataSourceId,
+                            "minStartTimeNs": startTimeNs,
+                            "maxEndTimeNs": endTimeNs,
+                            "point": [{
+                                "startTimeNanos": startTimeNs,
+                                "endTimeNanos": endTimeNs,
+                                "dataTypeName": "com.google.hydration",
+                                "value": [{ "fpVal": amountLiters }]
+                            }]
+                        })
+                    });
+                    
+                    if (response.ok) {
+                        console.log("Successfully logged to Google Fit");
+                        return true;
+                    } else {
+                        console.error("Error logging to Fit", await response.text());
+                        return false;
+                    }
+                } catch (err) {
+                    console.error("Network error logging to Fit", err);
+                    return false;
+                }
+            }
+        };
+
         // --- Components ---
 
         const CircularProgress = ({ percentage, current, goal, onEditGoal }) => {
@@ -131,27 +256,8 @@
                 <section className="flex flex-col items-center justify-center px-4 py-6">
                     <div className="relative w-72 h-72 flex items-center justify-center">
                         <svg className="w-full h-full -rotate-90 transform drop-shadow-xl" viewBox="0 0 100 100">
-                            <circle
-                                className="text-slate-200 dark:text-surface-dark transition-colors duration-300"
-                                cx="50"
-                                cy="50"
-                                fill="transparent"
-                                r={radius}
-                                stroke="currentColor"
-                                strokeWidth="6"
-                            />
-                            <circle
-                                className="text-primary transition-all duration-1000 ease-out"
-                                cx="50"
-                                cy="50"
-                                fill="transparent"
-                                r={radius}
-                                stroke="currentColor"
-                                strokeDasharray={circumference}
-                                strokeDashoffset={strokeDashoffset}
-                                strokeLinecap="round"
-                                strokeWidth="6"
-                            />
+                            <circle className="text-slate-200 dark:text-surface-dark transition-colors duration-300" cx="50" cy="50" fill="transparent" r={radius} stroke="currentColor" strokeWidth="6" />
+                            <circle className="text-primary transition-all duration-1000 ease-out" cx="50" cy="50" fill="transparent" r={radius} stroke="currentColor" strokeDasharray={circumference} strokeDashoffset={strokeDashoffset} strokeLinecap="round" strokeWidth="6" />
                         </svg>
 
                         <div className="absolute inset-0 flex flex-col items-center justify-center text-center">
@@ -168,17 +274,10 @@
 
                     <div className="flex flex-col items-center -mt-4 z-20">
                         <div className="flex items-baseline gap-2">
-                            <h1 className="text-3xl font-bold text-slate-900 dark:text-white">
-                                {current.toLocaleString()}
-                            </h1>
-                            <span className="text-lg text-slate-400 dark:text-slate-500 font-medium">
-                                / {goal.toLocaleString()} ml
-                            </span>
+                            <h1 className="text-3xl font-bold text-slate-900 dark:text-white">{current.toLocaleString()}</h1>
+                            <span className="text-lg text-slate-400 dark:text-slate-500 font-medium">/ {goal.toLocaleString()} ml</span>
                         </div>
-                        <button
-                            onClick={onEditGoal}
-                            className="mt-3 flex items-center gap-1.5 px-4 py-2 rounded-full bg-surface-light dark:bg-surface-dark border border-slate-200 dark:border-slate-700/50 text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 hover:text-primary dark:hover:text-primary transition-colors shadow-sm"
-                        >
+                        <button onClick={onEditGoal} className="mt-3 flex items-center gap-1.5 px-4 py-2 rounded-full bg-surface-light dark:bg-surface-dark border border-slate-200 dark:border-slate-700/50 text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 hover:text-primary dark:hover:text-primary transition-colors shadow-sm">
                             <span className="material-symbols-outlined text-sm">edit</span>
                             Edit Goal
                         </button>
@@ -195,21 +294,14 @@
                         <span className="material-symbols-outlined text-slate-400 text-sm cursor-help">info</span>
                     </div>
                     <div className="grid grid-cols-3 gap-4">
-                        <button
-                            onClick={() => onAdd(250)}
-                            className="group relative flex flex-col items-center justify-center p-4 rounded-2xl bg-surface-light dark:bg-surface-dark border border-slate-200 dark:border-slate-700 hover:border-primary/50 dark:hover:border-primary/50 transition-all shadow-sm active:scale-95"
-                        >
+                        <button onClick={() => onAdd(250)} className="group relative flex flex-col items-center justify-center p-4 rounded-2xl bg-surface-light dark:bg-surface-dark border border-slate-200 dark:border-slate-700 hover:border-primary/50 dark:hover:border-primary/50 transition-all shadow-sm active:scale-95">
                             <div className="w-10 h-10 mb-2 rounded-full bg-blue-50 dark:bg-blue-900/20 flex items-center justify-center group-hover:bg-primary/20 transition-colors">
                                 <span className="material-symbols-outlined text-blue-400 dark:text-blue-300 group-hover:text-primary">local_cafe</span>
                             </div>
                             <span className="text-sm font-bold text-slate-700 dark:text-slate-200">250 ml</span>
                             <span className="text-[10px] text-slate-400 mt-0.5">Small glass</span>
                         </button>
-
-                        <button
-                            onClick={() => onAdd(500)}
-                            className="group relative flex flex-col items-center justify-center p-4 rounded-2xl bg-surface-light dark:bg-surface-dark border border-slate-200 dark:border-slate-700 hover:border-primary/50 dark:hover:border-primary/50 transition-all shadow-sm active:scale-95"
-                        >
+                        <button onClick={() => onAdd(500)} className="group relative flex flex-col items-center justify-center p-4 rounded-2xl bg-surface-light dark:bg-surface-dark border border-slate-200 dark:border-slate-700 hover:border-primary/50 dark:hover:border-primary/50 transition-all shadow-sm active:scale-95">
                             <div className="absolute -top-1 -right-1 w-3 h-3 bg-primary rounded-full border-2 border-white dark:border-background-dark animate-pulse"></div>
                             <div className="w-10 h-10 mb-2 rounded-full bg-blue-50 dark:bg-blue-900/20 flex items-center justify-center group-hover:bg-primary/20 transition-colors">
                                 <span className="material-symbols-outlined text-blue-400 dark:text-blue-300 group-hover:text-primary">water_bottle</span>
@@ -217,11 +309,7 @@
                             <span className="text-sm font-bold text-slate-700 dark:text-slate-200">500 ml</span>
                             <span className="text-[10px] text-slate-400 mt-0.5">Bottle</span>
                         </button>
-
-                        <button
-                            onClick={() => onAdd(750)}
-                            className="group relative flex flex-col items-center justify-center p-4 rounded-2xl bg-surface-light dark:bg-surface-dark border border-slate-200 dark:border-slate-700 hover:border-primary/50 dark:hover:border-primary/50 transition-all shadow-sm active:scale-95"
-                        >
+                        <button onClick={() => onAdd(750)} className="group relative flex flex-col items-center justify-center p-4 rounded-2xl bg-surface-light dark:bg-surface-dark border border-slate-200 dark:border-slate-700 hover:border-primary/50 dark:hover:border-primary/50 transition-all shadow-sm active:scale-95">
                             <div className="w-10 h-10 mb-2 rounded-full bg-blue-50 dark:bg-blue-900/20 flex items-center justify-center group-hover:bg-primary/20 transition-colors">
                                 <span className="material-symbols-outlined text-blue-400 dark:text-blue-300 group-hover:text-primary">water_full</span>
                             </div>
@@ -235,11 +323,7 @@
 
         const HistoryList = ({ logs, onDelete }) => {
             const sortedLogs = [...logs].sort((a, b) => b.timestamp - a.timestamp);
-            
-            const formatTime = (timestamp) => {
-                return new Date(timestamp).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-            };
-
+            const formatTime = (timestamp) => new Date(timestamp).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
             const getIcon = (type) => {
                 switch (type) {
                     case 'tea': return 'local_cafe';
@@ -253,35 +337,22 @@
                 <section className="px-6 mt-8 pb-24">
                     <h3 className="text-lg font-bold text-slate-800 dark:text-slate-200 mb-4">Recent History</h3>
                     {logs.length === 0 ? (
-                        <div className="text-center py-8 text-slate-400 text-sm italic">
-                            No logs for today yet. Drink up!
-                        </div>
+                        <div className="text-center py-8 text-slate-400 text-sm italic">No logs for today yet. Drink up!</div>
                     ) : (
                         <div className="flex flex-col gap-3">
                             {sortedLogs.map((log) => (
-                                <div
-                                    key={log.id}
-                                    className="group flex items-center p-3 rounded-xl bg-surface-light dark:bg-surface-dark/50 border border-slate-100 dark:border-slate-800 transition-all hover:bg-slate-50 dark:hover:bg-surface-dark"
-                                >
+                                <div key={log.id} className="group flex items-center p-3 rounded-xl bg-surface-light dark:bg-surface-dark/50 border border-slate-100 dark:border-slate-800 transition-all hover:bg-slate-50 dark:hover:bg-surface-dark">
                                     <div className="w-10 h-10 rounded-full bg-blue-50 dark:bg-slate-800 flex items-center justify-center mr-3">
-                                        <span className="material-symbols-outlined text-blue-400 text-xl">
-                                            {getIcon(log.type)}
-                                        </span>
+                                        <span className="material-symbols-outlined text-blue-400 text-xl">{getIcon(log.type)}</span>
                                     </div>
                                     <div className="flex-1">
-                                        <p className="text-sm font-semibold text-slate-800 dark:text-slate-200 capitalize">
-                                            {log.type}
-                                        </p>
+                                        <p className="text-sm font-semibold text-slate-800 dark:text-slate-200 capitalize">{log.type}</p>
                                         <p className="text-xs text-slate-500">{formatTime(log.timestamp)}</p>
                                     </div>
                                     <div className="flex items-center gap-3">
                                         <span className="text-sm font-bold text-primary">+{log.amount} ml</span>
                                         {onDelete && (
-                                            <button
-                                                onClick={() => onDelete(log.id)}
-                                                className="p-1 rounded-full text-slate-400 hover:text-red-400 hover:bg-red-400/10 opacity-0 group-hover:opacity-100 transition-all"
-                                                aria-label="Delete log"
-                                            >
+                                            <button onClick={() => onDelete(log.id)} className="p-1 rounded-full text-slate-400 hover:text-red-400 hover:bg-red-400/10 opacity-0 group-hover:opacity-100 transition-all" aria-label="Delete log">
                                                 <span className="material-symbols-outlined text-lg">close</span>
                                             </button>
                                         )}
@@ -306,15 +377,9 @@
             if (!isOpen) return null;
 
             const handleNumClick = (num) => {
-                if (value.length < 5) {
-                    setValue((prev) => prev + num.toString());
-                }
+                if (value.length < 5) setValue((prev) => prev + num.toString());
             };
-
-            const handleBackspace = () => {
-                setValue((prev) => prev.slice(0, -1));
-            };
-
+            const handleBackspace = () => setValue((prev) => prev.slice(0, -1));
             const handleSubmit = () => {
                 const amount = parseInt(value, 10);
                 if (!isNaN(amount) && amount > 0) {
@@ -332,44 +397,20 @@
                                 <span className="material-symbols-outlined text-slate-500">close</span>
                             </button>
                         </div>
-
                         <div className="flex justify-center items-end mb-8 h-16">
                             <span className="text-5xl font-extrabold text-primary">{value || '0'}</span>
                             <span className="text-xl font-bold text-slate-400 dark:text-slate-500 mb-1 ml-2">ml</span>
                         </div>
-
                         <div className="grid grid-cols-3 gap-3 mb-6">
                             {[1, 2, 3, 4, 5, 6, 7, 8, 9].map((num) => (
-                                <button
-                                    key={num}
-                                    onClick={() => handleNumClick(num)}
-                                    className="h-14 rounded-xl bg-slate-50 dark:bg-slate-800 text-xl font-bold text-slate-800 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 active:scale-95 transition-all"
-                                >
-                                    {num}
-                                </button>
+                                <button key={num} onClick={() => handleNumClick(num)} className="h-14 rounded-xl bg-slate-50 dark:bg-slate-800 text-xl font-bold text-slate-800 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 active:scale-95 transition-all">{num}</button>
                             ))}
                             <div className="col-span-1"></div>
-                            <button
-                                onClick={() => handleNumClick(0)}
-                                className="h-14 rounded-xl bg-slate-50 dark:bg-slate-800 text-xl font-bold text-slate-800 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 active:scale-95 transition-all"
-                            >
-                                0
-                            </button>
-                            <button
-                                onClick={handleBackspace}
-                                className="h-14 rounded-xl flex items-center justify-center text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors active:scale-95"
-                            >
-                                <span className="material-symbols-outlined">backspace</span>
-                            </button>
+                            <button onClick={() => handleNumClick(0)} className="h-14 rounded-xl bg-slate-50 dark:bg-slate-800 text-xl font-bold text-slate-800 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 active:scale-95 transition-all">0</button>
+                            <button onClick={handleBackspace} className="h-14 rounded-xl flex items-center justify-center text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors active:scale-95"><span className="material-symbols-outlined">backspace</span></button>
                         </div>
-
-                        <button
-                            onClick={handleSubmit}
-                            disabled={!value || parseInt(value) === 0}
-                            className="w-full h-14 rounded-xl bg-primary hover:bg-primary-dark disabled:opacity-50 disabled:cursor-not-allowed text-white text-lg font-bold shadow-neon transition-all active:scale-95 flex items-center justify-center gap-2"
-                        >
-                            <span className="material-symbols-outlined">check</span>
-                            Done
+                        <button onClick={handleSubmit} disabled={!value || parseInt(value) === 0} className="w-full h-14 rounded-xl bg-primary hover:bg-primary-dark disabled:opacity-50 disabled:cursor-not-allowed text-white text-lg font-bold shadow-neon transition-all active:scale-95 flex items-center justify-center gap-2">
+                            <span className="material-symbols-outlined">check</span> Done
                         </button>
                     </div>
                 </div>
@@ -385,50 +426,61 @@
             const [todayLogs, setTodayLogs] = useState([]);
             const [totalConsumed, setTotalConsumed] = useState(0);
             const [refreshTrigger, setRefreshTrigger] = useState(0);
+            
+            // Google Fit State
+            const [isFitConnected, setIsFitConnected] = useState(false);
+            const [showFitSuccess, setShowFitSuccess] = useState(false);
 
-            // Load state on mount
             useEffect(() => {
                 const loaded = loadState();
                 setState(loaded);
+                
+                // Initialize Google Fit
+                GoogleFitService.init((connected) => {
+                    setIsFitConnected(connected);
+                });
             }, []);
 
-            // Handle visibility change (resume app)
             useEffect(() => {
                 const handleVisibilityChange = () => {
-                    if (document.visibilityState === 'visible') {
-                        setRefreshTrigger(prev => prev + 1);
-                    }
+                    if (document.visibilityState === 'visible') setRefreshTrigger(prev => prev + 1);
                 };
                 document.addEventListener("visibilitychange", handleVisibilityChange);
                 return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
             }, []);
 
-            // Calculate totals and logs for today
             useEffect(() => {
                 const startOfDay = new Date();
                 startOfDay.setHours(0, 0, 0, 0);
                 const startOfDayTimestamp = startOfDay.getTime();
-
                 const todays = state.logs.filter(log => log.timestamp >= startOfDayTimestamp);
                 const total = todays.reduce((sum, log) => sum + log.amount, 0);
-
                 setTodayLogs(todays);
                 setTotalConsumed(total);
-                
                 saveState(state);
             }, [state, refreshTrigger]);
 
-            const handleAddWater = (amount) => {
+            const handleAddWater = async (amount) => {
+                const timestamp = Date.now();
                 const newLog = {
                     id: generateId(),
                     amount,
-                    timestamp: Date.now(),
+                    timestamp,
                     type: 'water',
                 };
                 setState(prev => ({
                     ...prev,
                     logs: [...prev.logs, newLog]
                 }));
+
+                // Log to Google Fit if connected
+                if (isFitConnected) {
+                    const success = await GoogleFitService.logWater(amount, timestamp);
+                    if (success) {
+                        setShowFitSuccess(true);
+                        setTimeout(() => setShowFitSuccess(false), 2000);
+                    }
+                }
             };
 
             const handleDeleteLog = (id) => {
@@ -441,10 +493,7 @@
             };
 
             const handleUpdateGoal = (newGoal) => {
-                setState(prev => ({
-                    ...prev,
-                    dailyGoal: newGoal
-                }));
+                setState(prev => ({ ...prev, dailyGoal: newGoal }));
             };
 
             const progressPercentage = (totalConsumed / state.dailyGoal) * 100;
@@ -454,73 +503,52 @@
                 <div className="relative flex flex-col min-h-screen max-w-md mx-auto w-full pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]">
                     
                     {/* Background Pattern */}
-                    <div 
-                        className="fixed inset-0 z-[-1] opacity-5 dark:opacity-[0.03] pointer-events-none" 
-                        style={{ backgroundImage: `url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%239C92AC' fill-opacity='1'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E")` }}
-                    />
-                    
-                    {/* Decorative Glow */}
+                    <div className="fixed inset-0 z-[-1] opacity-5 dark:opacity-[0.03] pointer-events-none" style={{ backgroundImage: `url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%239C92AC' fill-opacity='1'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E")` }} />
                     <div className="fixed top-0 left-0 w-full h-[500px] bg-glow-primary pointer-events-none z-0 opacity-50"></div>
 
-                    {/* Main Content */}
+                    {/* Google Fit Success Toast */}
+                    {showFitSuccess && (
+                        <div className="fixed top-6 left-1/2 transform -translate-x-1/2 z-50 bg-surface-light dark:bg-surface-dark shadow-xl rounded-full px-4 py-2 flex items-center gap-2 border border-slate-200 dark:border-slate-700 animate-slide-up">
+                            <span className="w-2 h-2 rounded-full bg-green-500"></span>
+                            <span className="text-xs font-bold text-slate-700 dark:text-slate-200">Synced to Google Fit</span>
+                        </div>
+                    )}
+
                     <div className="relative z-10">
-                        
-                        {/* Header */}
                         <header className="flex items-center justify-between px-6 pt-8 pb-4">
                             <div className="flex flex-col">
-                                <span className="text-slate-500 dark:text-slate-400 text-sm font-medium tracking-wide uppercase">
-                                    Today, {todayDate}
-                                </span>
-                                <h2 className="text-2xl font-bold leading-tight tracking-tight mt-0.5 text-slate-900 dark:text-white">
-                                    Hi, Ayelet <span className="text-2xl" role="img" aria-label="wave">👋</span>
-                                </h2>
+                                <span className="text-slate-500 dark:text-slate-400 text-sm font-medium tracking-wide uppercase">Today, {todayDate}</span>
+                                <h2 className="text-2xl font-bold leading-tight tracking-tight mt-0.5 text-slate-900 dark:text-white">Hi, Human <span className="text-2xl" role="img" aria-label="wave">👋</span></h2>
                             </div>
-                            <button className="flex items-center justify-center w-12 h-12 rounded-full bg-surface-light dark:bg-surface-dark border border-slate-200 dark:border-slate-700/50 shadow-sm hover:scale-105 transition-transform">
-                                <span className="material-symbols-outlined text-slate-600 dark:text-slate-300">settings</span>
-                            </button>
+                            
+                            {/* Header Buttons */}
+                            <div className="flex gap-2">
+                                <button 
+                                    onClick={GoogleFitService.connect}
+                                    className={`flex items-center justify-center w-12 h-12 rounded-full border transition-all ${isFitConnected ? 'bg-green-500/10 border-green-500/50 text-green-500' : 'bg-surface-light dark:bg-surface-dark border-slate-200 dark:border-slate-700/50 text-slate-600 dark:text-slate-300'}`}
+                                    title={isFitConnected ? "Connected to Google Fit" : "Connect Google Fit"}
+                                >
+                                    <span className="material-symbols-outlined">favorite</span>
+                                </button>
+                                <button className="flex items-center justify-center w-12 h-12 rounded-full bg-surface-light dark:bg-surface-dark border border-slate-200 dark:border-slate-700/50 shadow-sm hover:scale-105 transition-transform">
+                                    <span className="material-symbols-outlined text-slate-600 dark:text-slate-300">settings</span>
+                                </button>
+                            </div>
                         </header>
 
-                        {/* Circular Progress */}
-                        <CircularProgress 
-                            percentage={progressPercentage} 
-                            current={totalConsumed} 
-                            goal={state.dailyGoal} 
-                            onEditGoal={() => setIsEditGoalOpen(true)}
-                        />
-
-                        {/* Quick Add */}
+                        <CircularProgress percentage={progressPercentage} current={totalConsumed} goal={state.dailyGoal} onEditGoal={() => setIsEditGoalOpen(true)} />
                         <QuickAdd onAdd={handleAddWater} />
-
-                        {/* Recent History */}
                         <HistoryList logs={todayLogs} onDelete={handleDeleteLog} />
                     </div>
 
-                    {/* FAB (Floating Action Button) */}
                     <div className="fixed bottom-6 left-0 w-full flex justify-center z-40 pointer-events-none pb-[env(safe-area-inset-bottom)]">
-                        <button 
-                            onClick={() => setIsKeypadOpen(true)}
-                            className="pointer-events-auto flex items-center justify-center w-16 h-16 rounded-full bg-primary text-white shadow-neon hover:bg-primary-dark transition-all active:scale-95 group"
-                            aria-label="Add custom amount"
-                        >
+                        <button onClick={() => setIsKeypadOpen(true)} className="pointer-events-auto flex items-center justify-center w-16 h-16 rounded-full bg-primary text-white shadow-neon hover:bg-primary-dark transition-all active:scale-95 group" aria-label="Add custom amount">
                             <span className="material-symbols-outlined text-3xl group-hover:rotate-90 transition-transform duration-300">add</span>
                         </button>
                     </div>
 
-                    {/* Modals */}
-                    <KeypadModal 
-                        isOpen={isKeypadOpen} 
-                        onClose={() => setIsKeypadOpen(false)} 
-                        onSubmit={handleAddWater} 
-                        title="Add Water"
-                    />
-
-                    <KeypadModal
-                        isOpen={isEditGoalOpen}
-                        onClose={() => setIsEditGoalOpen(false)}
-                        onSubmit={handleUpdateGoal}
-                        title="Set Daily Goal"
-                        initialValue={state.dailyGoal}
-                    />
+                    <KeypadModal isOpen={isKeypadOpen} onClose={() => setIsKeypadOpen(false)} onSubmit={handleAddWater} title="Add Water" />
+                    <KeypadModal isOpen={isEditGoalOpen} onClose={() => setIsEditGoalOpen(false)} onSubmit={handleUpdateGoal} title="Set Daily Goal" initialValue={state.dailyGoal} />
                 </div>
             );
         };
