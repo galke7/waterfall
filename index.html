@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <title>HydroFlow</title>
+    
+    <!-- React & ReactDOM -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    
+    <!-- Babel for JSX -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+    
+    <!-- Fonts & Icons -->
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet" />
+
+    <script>
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            colors: {
+              "primary": "#00ced1",
+              "primary-dark": "#00a6a8",
+              "background-light": "#f1f3f4",
+              "background-dark": "#0e1d2a",
+              "surface-dark": "#162838",
+              "surface-light": "#ffffff",
+            },
+            fontFamily: {
+              "display": ["Plus Jakarta Sans", "sans-serif"]
+            },
+            backgroundImage: {
+              'glow-primary': 'radial-gradient(circle, rgba(0,206,209,0.15) 0%, rgba(0,0,0,0) 70%)',
+            },
+            boxShadow: {
+              'neon': '0 0 20px -5px rgba(0, 206, 209, 0.5)',
+            },
+            animation: {
+                'fade-in': 'fadeIn 0.2s ease-out',
+                'slide-up': 'slideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1)',
+            },
+            keyframes: {
+                fadeIn: {
+                    '0%': { opacity: '0' },
+                    '100%': { opacity: '1' },
+                },
+                slideUp: {
+                    '0%': { transform: 'translateY(20px)', opacity: '0' },
+                    '100%': { transform: 'translateY(0)', opacity: '1' },
+                }
+            }
+          },
+        },
+      }
+    </script>
+    <style>
+      .material-symbols-outlined {
+        font-variation-settings: 'FILL' 1, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+      }
+      body {
+        -webkit-tap-highlight-color: transparent;
+        overscroll-behavior-y: none;
+      }
+      /* Custom scrollbar for webkit */
+      ::-webkit-scrollbar {
+        width: 6px;
+      }
+      ::-webkit-scrollbar-track {
+        background: transparent;
+      }
+      ::-webkit-scrollbar-thumb {
+        background: #334155;
+        border-radius: 3px;
+      }
+    </style>
+</head>
+<body class="font-display bg-background-light dark:bg-background-dark text-slate-900 dark:text-white min-h-screen relative overflow-x-hidden selection:bg-primary selection:text-white">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useCallback } = React;
+
+        // --- Constants & Types ---
+        const DEFAULT_GOAL = 2000;
+        const STORAGE_KEY = 'hydroflow_data_v1';
+
+        // --- Storage Service ---
+        // Using localStorage as it is the modern standard for persisting app state, 
+        // matching the behavior of the uploaded storageService.ts
+        const loadState = () => {
+            try {
+                const serializedState = localStorage.getItem(STORAGE_KEY);
+                if (serializedState === null) {
+                    return { dailyGoal: DEFAULT_GOAL, logs: [] };
+                }
+                return JSON.parse(serializedState);
+            } catch (err) {
+                console.error("Failed to load state", err);
+                return { dailyGoal: DEFAULT_GOAL, logs: [] };
+            }
+        };
+
+        const saveState = (state) => {
+            try {
+                const serializedState = JSON.stringify(state);
+                localStorage.setItem(STORAGE_KEY, serializedState);
+            } catch (err) {
+                console.error("Failed to save state", err);
+            }
+        };
+
+        const generateId = () => {
+            return Date.now().toString(36) + Math.random().toString(36).substr(2);
+        };
+
+        // --- Components ---
+
+        const CircularProgress = ({ percentage, current, goal, onEditGoal }) => {
+            const radius = 42;
+            const circumference = 2 * Math.PI * radius;
+            const visualPercentage = Math.min(percentage, 100);
+            const strokeDashoffset = circumference - (visualPercentage / 100) * circumference;
+
+            return (
+                <section className="flex flex-col items-center justify-center px-4 py-6">
+                    <div className="relative w-72 h-72 flex items-center justify-center">
+                        <svg className="w-full h-full -rotate-90 transform drop-shadow-xl" viewBox="0 0 100 100">
+                            <circle
+                                className="text-slate-200 dark:text-surface-dark transition-colors duration-300"
+                                cx="50"
+                                cy="50"
+                                fill="transparent"
+                                r={radius}
+                                stroke="currentColor"
+                                strokeWidth="6"
+                            />
+                            <circle
+                                className="text-primary transition-all duration-1000 ease-out"
+                                cx="50"
+                                cy="50"
+                                fill="transparent"
+                                r={radius}
+                                stroke="currentColor"
+                                strokeDasharray={circumference}
+                                strokeDashoffset={strokeDashoffset}
+                                strokeLinecap="round"
+                                strokeWidth="6"
+                            />
+                        </svg>
+
+                        <div className="absolute inset-0 flex flex-col items-center justify-center text-center">
+                            <div className="w-16 h-16 mb-2 rounded-full bg-primary/10 flex items-center justify-center text-primary animate-pulse">
+                                <span className="material-symbols-outlined" style={{ fontSize: '32px' }}>water_drop</span>
+                            </div>
+                            <span className="text-5xl font-extrabold tracking-tighter text-slate-900 dark:text-white">
+                                {Math.round(percentage)}
+                                <span className="text-2xl align-top ml-1 text-primary">%</span>
+                            </span>
+                            <p className="text-slate-500 dark:text-slate-400 text-sm font-medium mt-1">Daily Goal Met</p>
+                        </div>
+                    </div>
+
+                    <div className="flex flex-col items-center -mt-4 z-20">
+                        <div className="flex items-baseline gap-2">
+                            <h1 className="text-3xl font-bold text-slate-900 dark:text-white">
+                                {current.toLocaleString()}
+                            </h1>
+                            <span className="text-lg text-slate-400 dark:text-slate-500 font-medium">
+                                / {goal.toLocaleString()} ml
+                            </span>
+                        </div>
+                        <button
+                            onClick={onEditGoal}
+                            className="mt-3 flex items-center gap-1.5 px-4 py-2 rounded-full bg-surface-light dark:bg-surface-dark border border-slate-200 dark:border-slate-700/50 text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 hover:text-primary dark:hover:text-primary transition-colors shadow-sm"
+                        >
+                            <span className="material-symbols-outlined text-sm">edit</span>
+                            Edit Goal
+                        </button>
+                    </div>
+                </section>
+            );
+        };
+
+        const QuickAdd = ({ onAdd }) => {
+            return (
+                <section className="px-6 mt-4">
+                    <div className="flex items-center justify-between mb-4">
+                        <h3 className="text-lg font-bold text-slate-800 dark:text-slate-200">Quick Add</h3>
+                        <span className="material-symbols-outlined text-slate-400 text-sm cursor-help">info</span>
+                    </div>
+                    <div className="grid grid-cols-3 gap-4">
+                        <button
+                            onClick={() => onAdd(250)}
+                            className="group relative flex flex-col items-center justify-center p-4 rounded-2xl bg-surface-light dark:bg-surface-dark border border-slate-200 dark:border-slate-700 hover:border-primary/50 dark:hover:border-primary/50 transition-all shadow-sm active:scale-95"
+                        >
+                            <div className="w-10 h-10 mb-2 rounded-full bg-blue-50 dark:bg-blue-900/20 flex items-center justify-center group-hover:bg-primary/20 transition-colors">
+                                <span className="material-symbols-outlined text-blue-400 dark:text-blue-300 group-hover:text-primary">local_cafe</span>
+                            </div>
+                            <span className="text-sm font-bold text-slate-700 dark:text-slate-200">250 ml</span>
+                            <span className="text-[10px] text-slate-400 mt-0.5">Small glass</span>
+                        </button>
+
+                        <button
+                            onClick={() => onAdd(500)}
+                            className="group relative flex flex-col items-center justify-center p-4 rounded-2xl bg-surface-light dark:bg-surface-dark border border-slate-200 dark:border-slate-700 hover:border-primary/50 dark:hover:border-primary/50 transition-all shadow-sm active:scale-95"
+                        >
+                            <div className="absolute -top-1 -right-1 w-3 h-3 bg-primary rounded-full border-2 border-white dark:border-background-dark animate-pulse"></div>
+                            <div className="w-10 h-10 mb-2 rounded-full bg-blue-50 dark:bg-blue-900/20 flex items-center justify-center group-hover:bg-primary/20 transition-colors">
+                                <span className="material-symbols-outlined text-blue-400 dark:text-blue-300 group-hover:text-primary">water_bottle</span>
+                            </div>
+                            <span className="text-sm font-bold text-slate-700 dark:text-slate-200">500 ml</span>
+                            <span className="text-[10px] text-slate-400 mt-0.5">Bottle</span>
+                        </button>
+
+                        <button
+                            onClick={() => onAdd(750)}
+                            className="group relative flex flex-col items-center justify-center p-4 rounded-2xl bg-surface-light dark:bg-surface-dark border border-slate-200 dark:border-slate-700 hover:border-primary/50 dark:hover:border-primary/50 transition-all shadow-sm active:scale-95"
+                        >
+                            <div className="w-10 h-10 mb-2 rounded-full bg-blue-50 dark:bg-blue-900/20 flex items-center justify-center group-hover:bg-primary/20 transition-colors">
+                                <span className="material-symbols-outlined text-blue-400 dark:text-blue-300 group-hover:text-primary">water_full</span>
+                            </div>
+                            <span className="text-sm font-bold text-slate-700 dark:text-slate-200">750 ml</span>
+                            <span className="text-[10px] text-slate-400 mt-0.5">Large jug</span>
+                        </button>
+                    </div>
+                </section>
+            );
+        };
+
+        const HistoryList = ({ logs, onDelete }) => {
+            const sortedLogs = [...logs].sort((a, b) => b.timestamp - a.timestamp);
+            
+            const formatTime = (timestamp) => {
+                return new Date(timestamp).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+            };
+
+            const getIcon = (type) => {
+                switch (type) {
+                    case 'tea': return 'local_cafe';
+                    case 'coffee': return 'coffee';
+                    case 'juice': return 'local_bar';
+                    default: return 'water_drop';
+                }
+            };
+
+            return (
+                <section className="px-6 mt-8 pb-24">
+                    <h3 className="text-lg font-bold text-slate-800 dark:text-slate-200 mb-4">Recent History</h3>
+                    {logs.length === 0 ? (
+                        <div className="text-center py-8 text-slate-400 text-sm italic">
+                            No logs for today yet. Drink up!
+                        </div>
+                    ) : (
+                        <div className="flex flex-col gap-3">
+                            {sortedLogs.map((log) => (
+                                <div
+                                    key={log.id}
+                                    className="group flex items-center p-3 rounded-xl bg-surface-light dark:bg-surface-dark/50 border border-slate-100 dark:border-slate-800 transition-all hover:bg-slate-50 dark:hover:bg-surface-dark"
+                                >
+                                    <div className="w-10 h-10 rounded-full bg-blue-50 dark:bg-slate-800 flex items-center justify-center mr-3">
+                                        <span className="material-symbols-outlined text-blue-400 text-xl">
+                                            {getIcon(log.type)}
+                                        </span>
+                                    </div>
+                                    <div className="flex-1">
+                                        <p className="text-sm font-semibold text-slate-800 dark:text-slate-200 capitalize">
+                                            {log.type}
+                                        </p>
+                                        <p className="text-xs text-slate-500">{formatTime(log.timestamp)}</p>
+                                    </div>
+                                    <div className="flex items-center gap-3">
+                                        <span className="text-sm font-bold text-primary">+{log.amount} ml</span>
+                                        {onDelete && (
+                                            <button
+                                                onClick={() => onDelete(log.id)}
+                                                className="p-1 rounded-full text-slate-400 hover:text-red-400 hover:bg-red-400/10 opacity-0 group-hover:opacity-100 transition-all"
+                                                aria-label="Delete log"
+                                            >
+                                                <span className="material-symbols-outlined text-lg">close</span>
+                                            </button>
+                                        )}
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </section>
+            );
+        };
+
+        const KeypadModal = ({ isOpen, onClose, onSubmit, title = "Add Water", initialValue = 0 }) => {
+            const [value, setValue] = useState(initialValue > 0 ? initialValue.toString() : '');
+
+            useEffect(() => {
+                if (isOpen) {
+                    setValue(initialValue > 0 ? initialValue.toString() : '');
+                }
+            }, [isOpen, initialValue]);
+
+            if (!isOpen) return null;
+
+            const handleNumClick = (num) => {
+                if (value.length < 5) {
+                    setValue((prev) => prev + num.toString());
+                }
+            };
+
+            const handleBackspace = () => {
+                setValue((prev) => prev.slice(0, -1));
+            };
+
+            const handleSubmit = () => {
+                const amount = parseInt(value, 10);
+                if (!isNaN(amount) && amount > 0) {
+                    onSubmit(amount);
+                    onClose();
+                }
+            };
+
+            return (
+                <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 backdrop-blur-sm animate-fade-in">
+                    <div className="w-full max-w-sm bg-surface-light dark:bg-surface-dark rounded-t-3xl sm:rounded-3xl p-6 shadow-2xl transform transition-transform animate-slide-up">
+                        <div className="flex justify-between items-center mb-6">
+                            <h2 className="text-xl font-bold text-slate-900 dark:text-white">{title}</h2>
+                            <button onClick={onClose} className="p-2 rounded-full hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors">
+                                <span className="material-symbols-outlined text-slate-500">close</span>
+                            </button>
+                        </div>
+
+                        <div className="flex justify-center items-end mb-8 h-16">
+                            <span className="text-5xl font-extrabold text-primary">{value || '0'}</span>
+                            <span className="text-xl font-bold text-slate-400 dark:text-slate-500 mb-1 ml-2">ml</span>
+                        </div>
+
+                        <div className="grid grid-cols-3 gap-3 mb-6">
+                            {[1, 2, 3, 4, 5, 6, 7, 8, 9].map((num) => (
+                                <button
+                                    key={num}
+                                    onClick={() => handleNumClick(num)}
+                                    className="h-14 rounded-xl bg-slate-50 dark:bg-slate-800 text-xl font-bold text-slate-800 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 active:scale-95 transition-all"
+                                >
+                                    {num}
+                                </button>
+                            ))}
+                            <div className="col-span-1"></div>
+                            <button
+                                onClick={() => handleNumClick(0)}
+                                className="h-14 rounded-xl bg-slate-50 dark:bg-slate-800 text-xl font-bold text-slate-800 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 active:scale-95 transition-all"
+                            >
+                                0
+                            </button>
+                            <button
+                                onClick={handleBackspace}
+                                className="h-14 rounded-xl flex items-center justify-center text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors active:scale-95"
+                            >
+                                <span className="material-symbols-outlined">backspace</span>
+                            </button>
+                        </div>
+
+                        <button
+                            onClick={handleSubmit}
+                            disabled={!value || parseInt(value) === 0}
+                            className="w-full h-14 rounded-xl bg-primary hover:bg-primary-dark disabled:opacity-50 disabled:cursor-not-allowed text-white text-lg font-bold shadow-neon transition-all active:scale-95 flex items-center justify-center gap-2"
+                        >
+                            <span className="material-symbols-outlined">check</span>
+                            Done
+                        </button>
+                    </div>
+                </div>
+            );
+        };
+
+        // --- Main App Component ---
+
+        const App = () => {
+            const [state, setState] = useState({ dailyGoal: DEFAULT_GOAL, logs: [] });
+            const [isKeypadOpen, setIsKeypadOpen] = useState(false);
+            const [isEditGoalOpen, setIsEditGoalOpen] = useState(false);
+            const [todayLogs, setTodayLogs] = useState([]);
+            const [totalConsumed, setTotalConsumed] = useState(0);
+            const [refreshTrigger, setRefreshTrigger] = useState(0);
+
+            // Load state on mount
+            useEffect(() => {
+                const loaded = loadState();
+                setState(loaded);
+            }, []);
+
+            // Handle visibility change (resume app)
+            useEffect(() => {
+                const handleVisibilityChange = () => {
+                    if (document.visibilityState === 'visible') {
+                        setRefreshTrigger(prev => prev + 1);
+                    }
+                };
+                document.addEventListener("visibilitychange", handleVisibilityChange);
+                return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
+            }, []);
+
+            // Calculate totals and logs for today
+            useEffect(() => {
+                const startOfDay = new Date();
+                startOfDay.setHours(0, 0, 0, 0);
+                const startOfDayTimestamp = startOfDay.getTime();
+
+                const todays = state.logs.filter(log => log.timestamp >= startOfDayTimestamp);
+                const total = todays.reduce((sum, log) => sum + log.amount, 0);
+
+                setTodayLogs(todays);
+                setTotalConsumed(total);
+                
+                saveState(state);
+            }, [state, refreshTrigger]);
+
+            const handleAddWater = (amount) => {
+                const newLog = {
+                    id: generateId(),
+                    amount,
+                    timestamp: Date.now(),
+                    type: 'water',
+                };
+                setState(prev => ({
+                    ...prev,
+                    logs: [...prev.logs, newLog]
+                }));
+            };
+
+            const handleDeleteLog = (id) => {
+                if (window.confirm("Remove this entry?")) {
+                    setState(prev => ({
+                        ...prev,
+                        logs: prev.logs.filter(log => log.id !== id)
+                    }));
+                }
+            };
+
+            const handleUpdateGoal = (newGoal) => {
+                setState(prev => ({
+                    ...prev,
+                    dailyGoal: newGoal
+                }));
+            };
+
+            const progressPercentage = (totalConsumed / state.dailyGoal) * 100;
+            const todayDate = new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+
+            return (
+                <div className="relative flex flex-col min-h-screen max-w-md mx-auto w-full pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]">
+                    
+                    {/* Background Pattern */}
+                    <div 
+                        className="fixed inset-0 z-[-1] opacity-5 dark:opacity-[0.03] pointer-events-none" 
+                        style={{ backgroundImage: `url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%239C92AC' fill-opacity='1'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E")` }}
+                    />
+                    
+                    {/* Decorative Glow */}
+                    <div className="fixed top-0 left-0 w-full h-[500px] bg-glow-primary pointer-events-none z-0 opacity-50"></div>
+
+                    {/* Main Content */}
+                    <div className="relative z-10">
+                        
+                        {/* Header */}
+                        <header className="flex items-center justify-between px-6 pt-8 pb-4">
+                            <div className="flex flex-col">
+                                <span className="text-slate-500 dark:text-slate-400 text-sm font-medium tracking-wide uppercase">
+                                    Today, {todayDate}
+                                </span>
+                                <h2 className="text-2xl font-bold leading-tight tracking-tight mt-0.5 text-slate-900 dark:text-white">
+                                    Hi, Ayelet <span className="text-2xl" role="img" aria-label="wave">👋</span>
+                                </h2>
+                            </div>
+                            <button className="flex items-center justify-center w-12 h-12 rounded-full bg-surface-light dark:bg-surface-dark border border-slate-200 dark:border-slate-700/50 shadow-sm hover:scale-105 transition-transform">
+                                <span className="material-symbols-outlined text-slate-600 dark:text-slate-300">settings</span>
+                            </button>
+                        </header>
+
+                        {/* Circular Progress */}
+                        <CircularProgress 
+                            percentage={progressPercentage} 
+                            current={totalConsumed} 
+                            goal={state.dailyGoal} 
+                            onEditGoal={() => setIsEditGoalOpen(true)}
+                        />
+
+                        {/* Quick Add */}
+                        <QuickAdd onAdd={handleAddWater} />
+
+                        {/* Recent History */}
+                        <HistoryList logs={todayLogs} onDelete={handleDeleteLog} />
+                    </div>
+
+                    {/* FAB (Floating Action Button) */}
+                    <div className="fixed bottom-6 left-0 w-full flex justify-center z-40 pointer-events-none pb-[env(safe-area-inset-bottom)]">
+                        <button 
+                            onClick={() => setIsKeypadOpen(true)}
+                            className="pointer-events-auto flex items-center justify-center w-16 h-16 rounded-full bg-primary text-white shadow-neon hover:bg-primary-dark transition-all active:scale-95 group"
+                            aria-label="Add custom amount"
+                        >
+                            <span className="material-symbols-outlined text-3xl group-hover:rotate-90 transition-transform duration-300">add</span>
+                        </button>
+                    </div>
+
+                    {/* Modals */}
+                    <KeypadModal 
+                        isOpen={isKeypadOpen} 
+                        onClose={() => setIsKeypadOpen(false)} 
+                        onSubmit={handleAddWater} 
+                        title="Add Water"
+                    />
+
+                    <KeypadModal
+                        isOpen={isEditGoalOpen}
+                        onClose={() => setIsEditGoalOpen(false)}
+                        onSubmit={handleUpdateGoal}
+                        title="Set Daily Goal"
+                        initialValue={state.dailyGoal}
+                    />
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
