@@ -16,8 +16,6 @@
     <!-- Tailwind CSS (pinned to the v3 Play CDN build) -->
     <script src="https://cdn.tailwindcss.com/3.4.17?plugins=forms,container-queries"></script>
     
-    <!-- Google Identity Services -->
-    <script src="https://accounts.google.com/gsi/client" async defer></script>
     
     <!-- Fonts & Icons -->
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
@@ -35,10 +33,6 @@
               "background-dark": "#0e1d2a",
               "surface-dark": "#162838",
               "surface-light": "#ffffff",
-              "fit-red": "#EA4335",
-              "fit-yellow": "#FBBC04",
-              "fit-green": "#34A853",
-              "fit-blue": "#4285F4",
             },
             fontFamily: {
               "display": ["Plus Jakarta Sans", "sans-serif"]
@@ -94,14 +88,9 @@
         const { useState, useEffect, useCallback, useRef } = React;
 
         // --- CONFIGURATION ---
-        const GOOGLE_CLIENT_ID = "310423440367-sku9mv7cr23hkn911gig8v56fcjumqj1.apps.googleusercontent.com"; 
         
         const DEFAULT_GOAL = 2000;
         const STORAGE_KEY = 'waterfall_data_v1';
-        // New keys for saving the token
-        const GOOGLE_TOKEN_KEY = 'waterfall_google_token';
-        const GOOGLE_EXPIRY_KEY = 'waterfall_token_expiry';
-        const GOOGLE_FIT_SCOPES = 'https://www.googleapis.com/auth/fitness.nutrition.write';
 
         // --- Storage Service ---
         const loadState = () => {
@@ -130,153 +119,24 @@
             return Date.now().toString(36) + Math.random().toString(36).substr(2);
         };
 
-        // --- Google Fit Service ---
-        const GoogleFitService = {
-            tokenClient: null,
-            accessToken: null,
-
-            init: (callback) => {
-                // 1. Try to restore an existing token from LocalStorage
-                const storedToken = localStorage.getItem(GOOGLE_TOKEN_KEY);
-                const storedExpiry = localStorage.getItem(GOOGLE_EXPIRY_KEY);
-
-                if (storedToken && storedExpiry) {
-                    // Check if token is still valid (not expired)
-                    // We add a buffer of 5 minutes to be safe
-                    if (Date.now() < (parseInt(storedExpiry) - 300000)) {
-                        console.log("Restored valid Google Fit session");
-                        GoogleFitService.accessToken = storedToken;
-                        callback(true);
-                    } else {
-                        console.log("Saved Google Fit session expired");
-                        localStorage.removeItem(GOOGLE_TOKEN_KEY);
-                        localStorage.removeItem(GOOGLE_EXPIRY_KEY);
-                    }
-                }
-
-                // 2. Initialize the Google Client (for when user clicks the button)
-                const initGSI = () => {
-                    if (window.google) {
-                        try {
-                            GoogleFitService.tokenClient = google.accounts.oauth2.initTokenClient({
-                                client_id: GOOGLE_CLIENT_ID,
-                                scope: GOOGLE_FIT_SCOPES,
-                                callback: (tokenResponse) => {
-                                    if (tokenResponse.access_token) {
-                                        GoogleFitService.accessToken = tokenResponse.access_token;
-                                        
-                                        // Save token and expiry (usually expires in 3600s / 1 hour)
-                                        const expiryTime = Date.now() + (tokenResponse.expires_in * 1000);
-                                        localStorage.setItem(GOOGLE_TOKEN_KEY, tokenResponse.access_token);
-                                        localStorage.setItem(GOOGLE_EXPIRY_KEY, expiryTime.toString());
-                                        
-                                        callback(true);
-                                    } else {
-                                        callback(false);
-                                    }
-                                },
-                            });
-                        } catch (e) {
-                            console.error("Error initializing Google Identity Services:", e);
-                        }
-                    } else {
-                        // If script hasn't loaded yet, try again in 500ms
-                        setTimeout(initGSI, 500);
-                    }
-                };
-                
-                initGSI();
-            },
-
-            connect: () => {
-                if (GoogleFitService.tokenClient) {
-                    // Removed { prompt: 'consent' } to avoid forcing re-approval every time
-                    GoogleFitService.tokenClient.requestAccessToken({});
-                } else {
-                    alert("Google Services are still loading. Please wait a moment and try again.");
-                }
-            },
-            
-            disconnect: () => {
-                GoogleFitService.accessToken = null;
-                localStorage.removeItem(GOOGLE_TOKEN_KEY);
-                localStorage.removeItem(GOOGLE_EXPIRY_KEY);
-            },
-
-            // Create Data Source if it doesn't exist, then log data
-            logWater: async (amountMl, timestamp) => {
-                if (!GoogleFitService.accessToken) return false;
-
-                const amountLiters = amountMl / 1000;
-                // Google Fit requires nanoseconds
-                const startTimeNs = (timestamp * 1000000).toString(); 
-                const endTimeNs = ((timestamp + 1000) * 1000000).toString(); // 1s duration
-                
-                const dataSourceId = "raw:com.google.hydration:waterfall:WaterTracker:WaterLog";
-
-                // 1. Ensure Data Source Exists
-                try {
-                    await fetch('https://www.googleapis.com/fitness/v1/users/me/dataSources', {
-                        method: 'POST',
-                        headers: {
-                            'Authorization': `Bearer ${GoogleFitService.accessToken}`,
-                            'Content-Type': 'application/json'
-                        },
-                        body: JSON.stringify({
-                            "dataStreamId": dataSourceId,
-                            "name": "Waterfall Water Log",
-                            "type": "raw",
-                            "application": { "name": "waterfall" },
-                            "dataType": { "name": "com.google.hydration" },
-                            "device": { "manufacturer": "Web", "model": "Browser", "type": "unknown" }
-                        })
-                    });
-                } catch (e) {
-                    // Ignore conflict errors if datasource exists
-                    console.log("Datasource might already exist", e);
-                }
-
-                // 2. Add Dataset
-                const datasetId = `${startTimeNs}-${endTimeNs}`;
-                const url = `https://www.googleapis.com/fitness/v1/users/me/dataSources/${dataSourceId}/datasets/${datasetId}`;
-                
-                try {
-                    const response = await fetch(url, {
-                        method: 'PATCH',
-                        headers: {
-                            'Authorization': `Bearer ${GoogleFitService.accessToken}`,
-                            'Content-Type': 'application/json'
-                        },
-                        body: JSON.stringify({
-                            "dataSourceId": dataSourceId,
-                            "minStartTimeNs": startTimeNs,
-                            "maxEndTimeNs": endTimeNs,
-                            "point": [{
-                                "startTimeNanos": startTimeNs,
-                                "endTimeNanos": endTimeNs,
-                                "dataTypeName": "com.google.hydration",
-                                "value": [{ "fpVal": amountLiters }]
-                            }]
-                        })
-                    });
-                    
-                    if (response.ok) {
-                        console.log("Successfully logged to Google Fit");
-                        return true;
-                    } else if (response.status === 401) {
-                        // Token expired during request
-                        console.warn("Token expired");
-                        GoogleFitService.disconnect();
-                        return false;
-                    } else {
-                        console.error("Error logging to Fit", await response.text());
-                        return false;
-                    }
-                } catch (err) {
-                    console.error("Network error logging to Fit", err);
-                    return false;
-                }
+        const buildDaySeries = (logs, range, dailyGoal, now) => {
+            const todayStart = new Date(now);
+            todayStart.setHours(0, 0, 0, 0);
+            const days = [];
+            for (let i = range - 1; i >= 0; i--) {
+                const dayStart = new Date(todayStart);
+                dayStart.setDate(todayStart.getDate() - i);
+                const dayEnd = new Date(dayStart);
+                dayEnd.setDate(dayStart.getDate() + 1);
+                const start = dayStart.getTime(), end = dayEnd.getTime();
+                const total = logs.reduce(
+                    (s, l) => (l.timestamp >= start && l.timestamp < end ? s + l.amount : s), 0);
+                days.push({ ts: start, total });
             }
+            const maxScale = Math.max(dailyGoal, ...days.map(d => d.total), 1);
+            const avg = Math.round(days.reduce((s, d) => s + d.total, 0) / range);
+            const goalMetCount = days.filter(d => d.total >= dailyGoal).length;
+            return { days, maxScale, avg, goalMetCount };
         };
 
         // --- Components ---
@@ -452,6 +312,78 @@
             );
         };
 
+        const STAT_RANGES = [7, 14, 30];
+
+        const StatsModal = ({ isOpen, onClose, logs, dailyGoal }) => {
+            const [range, setRange] = useState(7);
+            if (!isOpen) return null;
+
+            const { days, maxScale, avg, goalMetCount } = buildDaySeries(logs, range, dailyGoal, Date.now());
+            const fmt = (ts, opts) => new Date(ts).toLocaleDateString('en-GB', opts);
+
+            return (
+                <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 backdrop-blur-sm animate-fade-in">
+                    <div className="w-full max-w-sm bg-surface-light dark:bg-surface-dark rounded-t-3xl sm:rounded-3xl p-6 shadow-2xl transform transition-transform animate-slide-up">
+                        <div className="flex justify-between items-center mb-5">
+                            <h2 className="text-xl font-bold text-slate-900 dark:text-white">History</h2>
+                            <button onClick={onClose} className="p-2 rounded-full hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors">
+                                <span className="material-symbols-outlined text-slate-500">close</span>
+                            </button>
+                        </div>
+
+                        <div className="flex gap-1 p-1 mb-6 rounded-xl bg-slate-100 dark:bg-slate-800">
+                            {STAT_RANGES.map((r) => (
+                                <button key={r} onClick={() => setRange(r)}
+                                    className={`flex-1 py-2 rounded-lg text-sm font-bold transition-all ${range === r ? 'bg-primary text-white shadow-neon' : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200'}`}>
+                                    {r} Days
+                                </button>
+                            ))}
+                        </div>
+
+                        {logs.length === 0 ? (
+                            <div className="text-center py-12 text-slate-400 text-sm italic">No water logged yet 💧</div>
+                        ) : (
+                            <>
+                                <div className="relative h-40 mb-2">
+                                    <div className="absolute left-0 right-0 border-t border-dashed border-primary/60 z-10" style={{ bottom: `${(dailyGoal / maxScale) * 100}%` }}>
+                                        <span className="absolute -top-2 right-0 text-[9px] font-bold text-primary/80 bg-surface-light dark:bg-surface-dark px-1 leading-none">goal</span>
+                                    </div>
+                                    <div className="absolute inset-0 flex items-end gap-px">
+                                        {days.map((d) => (
+                                            <div key={d.ts} className="flex-1 flex items-end h-full" title={`${fmt(d.ts, { day: 'numeric', month: 'short' })} — ${d.total} ml`}>
+                                                <div className={`w-full rounded-t transition-all duration-500 ${d.total >= dailyGoal ? 'bg-primary' : 'bg-primary/40'}`} style={{ height: `${(d.total / maxScale) * 100}%` }}></div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+
+                                {range === 7 ? (
+                                    <div className="flex gap-px mb-5">
+                                        {days.map((d) => (
+                                            <span key={d.ts} className="flex-1 text-center text-[10px] text-slate-400">
+                                                {new Date(d.ts).toLocaleDateString('en-US', { weekday: 'narrow' })}
+                                            </span>
+                                        ))}
+                                    </div>
+                                ) : (
+                                    <div className="flex justify-between mb-5 text-[10px] text-slate-400 font-medium">
+                                        <span>{fmt(days[0].ts, { day: 'numeric', month: 'short' })}</span>
+                                        <span>{fmt(days[days.length - 1].ts, { day: 'numeric', month: 'short' })}</span>
+                                    </div>
+                                )}
+
+                                <div className="text-center text-xs text-slate-500 dark:text-slate-400">
+                                    Avg <span className="font-bold text-slate-700 dark:text-slate-200">{avg.toLocaleString()} ml</span>/day
+                                    <span className="mx-1.5 text-slate-300 dark:text-slate-600">·</span>
+                                    goal met <span className="font-bold text-primary">{goalMetCount}/{range}</span> days
+                                </div>
+                            </>
+                        )}
+                    </div>
+                </div>
+            );
+        };
+
         // --- Main App Component ---
 
         const App = () => {
@@ -462,18 +394,10 @@
             const [totalConsumed, setTotalConsumed] = useState(0);
             const [refreshTrigger, setRefreshTrigger] = useState(0);
             
-            // Google Fit State
-            const [isFitConnected, setIsFitConnected] = useState(false);
-            const [showFitSuccess, setShowFitSuccess] = useState(false);
+            const [isStatsOpen, setIsStatsOpen] = useState(false);
 
             useEffect(() => {
-                const loaded = loadState();
-                setState(loaded);
-                
-                // Initialize Google Fit
-                GoogleFitService.init((connected) => {
-                    setIsFitConnected(connected);
-                });
+                setState(loadState());
             }, []);
 
             useEffect(() => {
@@ -495,32 +419,14 @@
                 saveState(state);
             }, [state, refreshTrigger]);
 
-            const handleAddWater = async (amount) => {
-                const timestamp = Date.now();
+            const handleAddWater = (amount) => {
                 const newLog = {
                     id: generateId(),
                     amount,
-                    timestamp,
+                    timestamp: Date.now(),
                     type: 'water',
                 };
-                setState(prev => ({
-                    ...prev,
-                    logs: [...prev.logs, newLog]
-                }));
-
-                // Log to Google Fit if connected
-                if (isFitConnected) {
-                    const success = await GoogleFitService.logWater(amount, timestamp);
-                    if (success) {
-                        setShowFitSuccess(true);
-                        setTimeout(() => setShowFitSuccess(false), 2000);
-                    } else {
-                        // If log failed because token expired, update UI
-                        if (!GoogleFitService.accessToken) {
-                            setIsFitConnected(false);
-                        }
-                    }
-                }
+                setState(prev => ({ ...prev, logs: [...prev.logs, newLog] }));
             };
 
             const handleDeleteLog = (id) => {
@@ -546,14 +452,6 @@
                     <div className="fixed inset-0 z-[-1] opacity-5 dark:opacity-[0.03] pointer-events-none" style={{ backgroundImage: `url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%239C92AC' fill-opacity='1'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E")` }} />
                     <div className="fixed top-0 left-0 w-full h-[500px] bg-glow-primary pointer-events-none z-0 opacity-50"></div>
 
-                    {/* Google Fit Success Toast */}
-                    {showFitSuccess && (
-                        <div className="fixed top-6 left-1/2 transform -translate-x-1/2 z-50 bg-surface-light dark:bg-surface-dark shadow-xl rounded-full px-4 py-2 flex items-center gap-2 border border-slate-200 dark:border-slate-700 animate-slide-up">
-                            <span className="w-2 h-2 rounded-full bg-green-500"></span>
-                            <span className="text-xs font-bold text-slate-700 dark:text-slate-200">Synced to Google Fit</span>
-                        </div>
-                    )}
-
                     <div className="relative z-10">
                         <header className="flex items-center justify-between px-6 pt-8 pb-4">
                             <div className="flex flex-col">
@@ -563,12 +461,12 @@
                             
                             {/* Header Buttons */}
                             <div className="flex gap-2">
-                                <button 
-                                    onClick={GoogleFitService.connect}
-                                    className={`flex items-center justify-center w-12 h-12 rounded-full border transition-all ${isFitConnected ? 'bg-green-500/10 border-green-500/50 text-green-500' : 'bg-surface-light dark:bg-surface-dark border-slate-200 dark:border-slate-700/50 text-slate-600 dark:text-slate-300'}`}
-                                    title={isFitConnected ? "Connected to Google Fit" : "Connect Google Fit"}
+                                <button
+                                    onClick={() => setIsStatsOpen(true)}
+                                    className="flex items-center justify-center w-12 h-12 rounded-full bg-surface-light dark:bg-surface-dark border border-slate-200 dark:border-slate-700/50 shadow-sm hover:scale-105 transition-transform text-slate-600 dark:text-slate-300"
+                                    title="History"
                                 >
-                                    <span className="material-symbols-outlined">favorite</span>
+                                    <span className="material-symbols-outlined">water_drop</span>
                                 </button>
                                 <button className="flex items-center justify-center w-12 h-12 rounded-full bg-surface-light dark:bg-surface-dark border border-slate-200 dark:border-slate-700/50 shadow-sm hover:scale-105 transition-transform">
                                     <span className="material-symbols-outlined text-slate-600 dark:text-slate-300">settings</span>
@@ -589,6 +487,7 @@
 
                     <KeypadModal isOpen={isKeypadOpen} onClose={() => setIsKeypadOpen(false)} onSubmit={handleAddWater} title="Add Water" />
                     <KeypadModal isOpen={isEditGoalOpen} onClose={() => setIsEditGoalOpen(false)} onSubmit={handleUpdateGoal} title="Set Daily Goal" initialValue={state.dailyGoal} />
+                    <StatsModal isOpen={isStatsOpen} onClose={() => setIsStatsOpen(false)} logs={state.logs} dailyGoal={state.dailyGoal} />
                 </div>
             );
         };
