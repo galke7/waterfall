@@ -5,15 +5,16 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <title>Waterfall</title>
     
-    <!-- React & ReactDOM -->
-    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-    
-    <!-- Babel for JSX -->
-    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-    
-    <!-- Tailwind CSS -->
-    <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+    <!-- React & ReactDOM (pinned to exact versions so the CDN cannot drift across releases) -->
+    <script crossorigin src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+
+    <!-- Babel for JSX (pinned: the unpinned "latest" tag rolled to Babel 8, which dropped the
+         implicit JSX preset and left this page blank. Pin + explicit data-presets below fix it.) -->
+    <script src="https://unpkg.com/@babel/standalone@7.29.7/babel.min.js"></script>
+
+    <!-- Tailwind CSS (pinned to the v3 Play CDN build) -->
+    <script src="https://cdn.tailwindcss.com/3.4.17?plugins=forms,container-queries"></script>
     
     <!-- Google Identity Services -->
     <script src="https://accounts.google.com/gsi/client" async defer></script>
@@ -89,7 +90,7 @@
 <body class="font-display bg-background-light dark:bg-background-dark text-slate-900 dark:text-white min-h-screen relative overflow-x-hidden selection:bg-primary selection:text-white">
     <div id="root"></div>
 
-    <script type="text/babel">
+    <script type="text/babel" data-presets="react">
         const { useState, useEffect, useCallback, useRef } = React;
 
         // --- CONFIGURATION ---
